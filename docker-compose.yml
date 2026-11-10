@@ -7,6 +7,8 @@ services:
       - bot-data:/data
       # Edit tweet_template.txt on the host and the bot uses it from its next post.
       - ./tweet_template.txt:/app/tweet_template.txt:ro
+      # Dry runs save the images they would post here.
+      - ./out:/app/out
 
 volumes:
   bot-data:
