@@ -27,7 +27,7 @@ FIELDS = {
     "name": "collection name (COLLECTION_NAME in .env)",
     "token_id": "token number, e.g. 2863",
     "price": "price, e.g. 0.003849",
-    "symbol": "ETH or USDG",
+    "symbol": "the coin paid, e.g. ETH, APE or USDC",
     "usd": 'USD value with its brackets, e.g. " ($9.87)"',
     "marketplace": "e.g. OpenSea (line is dropped if unknown)",
     "seller": "seller's ENS name, or their wallet shortened",
@@ -35,12 +35,23 @@ FIELDS = {
 }
 
 
+def _template_lines() -> Optional[List[str]]:
+    if not TEMPLATE_FILE.exists():
+        return None
+    return [line for line in TEMPLATE_FILE.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def load_template() -> List[str]:
-    if TEMPLATE_FILE.exists():
-        lines = [line for line in TEMPLATE_FILE.read_text(encoding="utf-8").splitlines() if line.strip()]
-        if lines and not template_problems(lines):
-            return lines
+    lines = _template_lines()
+    if lines and not template_problems(lines):
+        return lines
     return list(DEFAULT_LINES)
+
+
+def check_template() -> List[str]:
+    """Problems with tweet_template.txt that make posts fall back to the default layout."""
+    lines = _template_lines()
+    return [] if lines is None else template_problems(lines)
 
 
 def template_problems(lines: List[str]) -> List[str]:

@@ -44,7 +44,7 @@ def fetch_uri(uri: str, gateway: str) -> bytes:
     last_error: Exception = ValueError(f"unsupported URI {uri}")
     for url in _gateway_urls(uri, gateway):
         try:
-            resp = requests.get(url, timeout=30, stream=True, headers={"User-Agent": "whalestreet-salesbot/1.0"})
+            resp = requests.get(url, timeout=30, stream=True, headers={"User-Agent": "nft-sales-bot/1.0"})
             resp.raise_for_status()
             data = resp.raw.read(MAX_DOWNLOAD + 1, decode_content=True)
             if len(data) > MAX_DOWNLOAD:

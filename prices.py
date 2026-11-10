@@ -4,24 +4,24 @@ from __future__ import annotations
 import logging
 import time
 from decimal import Decimal
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import requests
 
 from chain import RPC, decode_string
-from config import PAYMENT_TOKENS
 
 log = logging.getLogger(__name__)
 
-ETH_USD_URL = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
+COINBASE_URL = "https://api.coinbase.com/v2/prices/{}-USD/spot"
+COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd"
+COINGECKO_IDS = {"MNT": "mantle"}  # coins Coinbase lists under another meaning of the same ticker
 
 
 class Pricer:
-    def __init__(self, rpc: RPC):
+    def __init__(self, rpc: RPC, payment_tokens: dict):
         self.rpc = rpc
-        self.tokens = dict(PAYMENT_TOKENS)
-        self._eth_usd: Optional[Decimal] = None
-        self._eth_usd_at = 0.0
+        self.tokens = dict(payment_tokens)
+        self._usd: Dict[str, Tuple[Optional[Decimal], float]] = {}  # coin -> (price, when fetched)
 
     def token_info(self, token: str) -> dict:
         if token not in self.tokens:
@@ -34,16 +34,23 @@ class Pricer:
             self.tokens[token] = {"symbol": symbol, "decimals": decimals, "peg": None}
         return self.tokens[token]
 
-    def eth_usd(self) -> Optional[Decimal]:
-        if self._eth_usd is None or time.time() - self._eth_usd_at > 60:
+    def usd_price(self, coin: str) -> Optional[Decimal]:
+        """USD price of a coin like ETH or BERA, refreshed at most once a minute."""
+        price, fetched = self._usd.get(coin, (None, 0.0))
+        if time.time() - fetched > 60:
             try:
-                resp = requests.get(ETH_USD_URL, timeout=10)
-                resp.raise_for_status()
-                self._eth_usd = Decimal(resp.json()["data"]["amount"])
-                self._eth_usd_at = time.time()
+                if coin in COINGECKO_IDS:
+                    resp = requests.get(COINGECKO_URL.format(COINGECKO_IDS[coin]), timeout=10)
+                    resp.raise_for_status()
+                    price = Decimal(str(resp.json()[COINGECKO_IDS[coin]]["usd"]))
+                else:
+                    resp = requests.get(COINBASE_URL.format(coin), timeout=10)
+                    resp.raise_for_status()
+                    price = Decimal(resp.json()["data"]["amount"])
+                self._usd[coin] = (price, time.time())
             except Exception as e:
-                log.warning("Couldn't fetch the ETH price (%s); using the last known price", e)
-        return self._eth_usd
+                log.warning("Couldn't fetch the %s price (%s); using the last known price", coin, e)
+        return price
 
     def describe(self, token: str, amount: int) -> Tuple[Decimal, str, Optional[Decimal]]:
         """Returns (price, symbol, usd) for a raw on-chain amount."""
@@ -52,7 +59,7 @@ class Pricer:
         usd = None
         if info["peg"] == "USD":
             usd = price
-        elif info["peg"] == "ETH":
-            rate = self.eth_usd()
+        elif info["peg"]:
+            rate = self.usd_price(info["peg"])
             usd = price * rate if rate is not None else None
         return price, info["symbol"], usd
