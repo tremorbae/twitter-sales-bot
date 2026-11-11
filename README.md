@@ -14,8 +14,9 @@ Works on Ethereum, Base, ApeChain, Berachain, MegaETH and 15 more chains.
 ## You need
 
 - [Docker](https://docs.docker.com/get-docker/) (free)
-- An X account for the bot
+- An X account for the bot, with API credits (about $0.015 per post)
 - Your collection's contract address (on your OpenSea page)
+- A computer or server that stays on: the bot only posts while it's running (see [Where to run it](#where-to-run-it))
 
 ## 1. Add your collection
 
@@ -70,6 +71,28 @@ docker compose up -d
 ```
 
 It keeps running and posts each new sale. Stop it with `docker compose down`.
+
+## Where to run it
+
+The bot only posts while it's running. If it's off for a while, it catches up on missed sales
+when it starts again.
+
+**On your own computer (free).** Follow steps 1–4 above. It works as long as the computer is
+on and awake, so it's fine for trying it out but will miss time while the computer sleeps.
+
+**On a server (about $5/month, runs 24/7).** Rent a small Linux server (DigitalOcean, Hetzner,
+Linode, ...), install Docker on it, copy this folder and your `.env` to it, then run steps 3–4
+there. It restarts by itself if the server reboots.
+
+**On a hosting service (Railway, Render, Fly.io).** No server to manage:
+
+1. Put this folder on GitHub (or fork this repo) and connect it to the host. It builds from the `Dockerfile`.
+2. Instead of a `.env` file, type the same settings into the host's **environment variables** page.
+3. Add a **volume** mounted at `/data`, so the bot remembers where it left off after a restart.
+   Without it, every restart starts from "now" and can miss sales.
+4. On Render, create it as a **Background Worker**.
+
+To test there first, keep `DRY_RUN=true` and read the host's logs: posts appear there instead of on X.
 
 ## Tips
 
