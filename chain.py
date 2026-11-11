@@ -1,4 +1,4 @@
-"""Reads the chain over JSON-RPC and turns NFT transfers into sales."""
+"""Reads the chain over JSON-RPC: turns NFT transfers into sales, and looks up ENS names."""
 from __future__ import annotations
 
 import logging
@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import requests
+from Crypto.Hash import keccak
 
 from config import (BLUR_EXCHANGE, NATIVE, OPENSEA_FEE_RECIPIENTS, OPENSEA_ZONES, SCATTER_OFFERERS, SCATTER_ROUTERS,
                     SEAPORT_ADDRESSES, Chain)
@@ -112,10 +113,6 @@ def decode_string(result: str) -> str:
     return raw[offset + 32:offset + 32 + length].decode("utf-8", "replace")
 
 
-def encode_uint(value: int) -> str:
-    return format(value, "064x")
-
-
 # ---- Seaport ---------------------------------------------------------------------
 
 class Item(NamedTuple):
@@ -130,7 +127,7 @@ class Order(NamedTuple):
     offerer: str
     offer: List[Item]
     consideration: List[Item]
-    zone: str = ""
+    zone: str
 
 
 def decode_order_fulfilled(log_entry: dict) -> Order:
@@ -159,6 +156,10 @@ def _is_nft(item: Item) -> bool:
     return item.item_type in (ERC721_ITEM, ERC721_CRITERIA_ITEM)
 
 
+def _has_nft(items: List[Item], contract: str, token_id: int) -> bool:
+    return any(_is_nft(i) and i.token == contract and i.identifier == token_id for i in items)
+
+
 def _payment(items: List[Item]) -> Optional[Tuple[str, int]]:
     """Total paid in the first payment token found among `items`."""
     payments = [i for i in items if i.item_type in (NATIVE_ITEM, ERC20_ITEM)]
@@ -179,12 +180,11 @@ def seaport_price(orders: List[Order], contract: str, token_id: int) -> Optional
     best = None
     for order in orders:
         for nft_side, pay_side in ((order.offer, order.consideration), (order.consideration, order.offer)):
-            nfts = [i for i in nft_side if _is_nft(i)]
-            if not any(i.token == contract and i.identifier == token_id for i in nfts):
+            if not _has_nft(nft_side, contract, token_id):
                 continue
             paid = _payment(pay_side)
             if paid:
-                per_item = paid[1] // len(nfts)  # bundles: split evenly
+                per_item = paid[1] // sum(1 for i in nft_side if _is_nft(i))  # bundles: split evenly
                 if best is None or per_item > best[1]:
                     best = (paid[0], per_item)
     return best
@@ -196,8 +196,7 @@ def seaport_marketplace(orders: List[Order], contract: str, token_id: int) -> Op
     Only this NFT's own orders count, so a sweep mixing OpenSea and Scatter listings
     labels each NFT correctly. None when no marketplace can be confirmed.
     """
-    mine = [o for o in orders
-            if any(_is_nft(i) and i.token == contract and i.identifier == token_id for i in o.offer + o.consideration)]
+    mine = [o for o in orders if _has_nft(o.offer + o.consideration, contract, token_id)]
     if any(o.offerer in SCATTER_OFFERERS for o in mine):
         return "Scatter"  # Scatter listings and offers are orders from its own contract
     if any(o.zone in OPENSEA_ZONES or any(i.recipient in OPENSEA_FEE_RECIPIENTS for i in o.consideration) for o in mine):
@@ -229,20 +228,13 @@ def blur_prices(receipt: dict) -> Dict[Tuple[str, int], int]:
 class Transfer:
     tx_hash: str
     log_index: int
-    block: int
     token_id: int
     seller: str
     buyer: str
 
 
 @dataclass
-class Sale:
-    tx_hash: str
-    log_index: int
-    block: int
-    token_id: int
-    seller: str
-    buyer: str
+class Sale(Transfer):
     payment_token: str  # NATIVE for plain ETH
     amount: int         # in the payment token's smallest unit
     marketplace: Optional[str]
@@ -263,8 +255,7 @@ def nft_transfers(logs: list) -> List[Transfer]:
         if seller == NATIVE or buyer in BURN_ADDRESSES:
             continue  # mint or burn
         transfers.append(Transfer(
-            entry["transactionHash"], int(entry["logIndex"], 16), int(entry["blockNumber"], 16),
-            int(topics[3], 16), seller, buyer,
+            entry["transactionHash"], int(entry["logIndex"], 16), int(topics[3], 16), seller, buyer,
         ))
     return transfers
 
@@ -331,8 +322,7 @@ def sales_in_transaction(contract: str, transfers: List[Transfer], receipt: dict
             marketplace = "Scatter"
         if not priced:
             continue
-        sales.append(Sale(t.tx_hash, t.log_index, t.block, t.token_id, t.seller, t.buyer,
-                          priced[0], priced[1], marketplace))
+        sales.append(Sale(**vars(t), payment_token=priced[0], amount=priced[1], marketplace=marketplace))
     return sales
 
 
@@ -353,3 +343,68 @@ def sales_for_tx(rpc: RPC, contract: str, tx_hash: str, chain: Chain) -> List[Sa
         raise SystemExit(f"Transaction {tx_hash} not found on {chain.name} (is CHAIN right?)")
     ours = [entry for entry in receipt["logs"] if entry["address"].lower() == contract]
     return sales_in_transaction(contract, nft_transfers(ours), receipt, rpc.transaction(tx_hash), chain)
+
+
+# ---- ENS names -----------------------------------------------------------------------
+# A wallet's primary ENS name (e.g. vitalik.eth) from Ethereum mainnet. A wallet has the same
+# address on every EVM chain, so its Ethereum name applies on any chain. A name only counts if it
+# also points back to the address, so nobody can claim someone else's wallet.
+
+ENS_REGISTRY = "0x00000000000c2e074ec69a0dfb2997ba6c7d2e1e"
+ENS_RESOLVER, ENS_NAME, ENS_ADDR = "0x0178b8bf", "0x691f3431", "0x3b3b57de"  # resolver(), name(), addr()
+ENS_CACHE_SECONDS = 6 * 3600
+
+
+def _keccak(data: bytes) -> bytes:
+    return keccak.new(digest_bits=256, data=data).digest()
+
+
+def namehash(name: str) -> bytes:
+    node = b"\0" * 32
+    for label in reversed(name.split(".")) if name else []:
+        node = _keccak(node + _keccak(label.encode()))
+    return node
+
+
+ADDR_REVERSE = namehash("addr.reverse")
+
+
+class ENS:
+    def __init__(self, rpc_url: str):
+        self.rpc = RPC(rpc_url)
+        self.cache: Dict[str, Tuple[Optional[str], float]] = {}
+
+    def _resolver(self, node: bytes) -> Optional[str]:
+        address = "0x" + self.rpc.eth_call(ENS_REGISTRY, ENS_RESOLVER + node.hex())[-40:]
+        return None if address == NATIVE else address
+
+    def _lookup(self, address: str) -> Optional[str]:
+        node = _keccak(ADDR_REVERSE + _keccak(address[2:].encode()))
+        resolver = self._resolver(node)
+        if not resolver:
+            return None
+        name = decode_string(self.rpc.eth_call(resolver, ENS_NAME + node.hex())).strip()
+        if not name or not name.isprintable() or len(name) > 40:
+            return None
+        forward_node = namehash(name.lower())
+        forward_resolver = self._resolver(forward_node)
+        if not forward_resolver:
+            return None
+        points_to = "0x" + self.rpc.eth_call(forward_resolver, ENS_ADDR + forward_node.hex())[-40:]
+        return name if points_to == address else None
+
+    def name(self, address: str) -> Optional[str]:
+        """The primary ENS name, or None (also None if the lookup fails, so posts never wait on ENS)."""
+        address = address.lower()
+        cached = self.cache.get(address)
+        if cached and time.time() - cached[1] < ENS_CACHE_SECONDS:
+            return cached[0]
+        try:
+            name = self._lookup(address)
+        except (RPCError, ValueError, IndexError):
+            name = None  # a contract reverted or returned junk: treat as "no name"
+        except Exception as e:
+            log.warning("ENS lookup for %s failed: %s", address, e)
+            return None
+        self.cache[address] = (name, time.time())
+        return name

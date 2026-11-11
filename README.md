@@ -19,16 +19,29 @@ Works on Ethereum, Base, ApeChain, Berachain, MegaETH and 15 more chains.
 
 ## 1. Add your collection
 
-Copy `.env.example` to a new file named `.env` and change these lines:
+In this folder, create a file named `.env` (in Terminal: `touch .env && open -e .env`) and paste this in:
 
 ```
 CHAIN=ethereum
 CONTRACT_ADDRESS=0x06f97e756f5c7ac0db75411101bd09e17f63aba7
 COLLECTION_NAME=moemoe LLC
 EMOJI=🎀
+
+X_API_KEY=
+X_API_SECRET=
+X_ACCESS_TOKEN=
+X_ACCESS_TOKEN_SECRET=
+
+DRY_RUN=true
 ```
 
-`CHAIN` is your chain's name, like `base` or `apechain` (the full list is in `.env.example`).
+Change the first 4 lines to your collection (they're filled in for moemoe LLC).
+Keep `.env` private: it will hold your X keys.
+
+`CHAIN` is one of: `ethereum`, `base`, `arbitrum`, `optimism`, `polygon`, `abstract`, `apechain`,
+`berachain`, `megaeth`, `monad`, `hyperevm`, `ink`, `mantle`, `zora`, `shape`, `unichain`,
+`soneium`, `avalanche`, `sei`, `robinhood`. On another EVM chain, use its chain ID and add
+`RPC_URL=` (plus `NATIVE_SYMBOL=` if its coin isn't ETH).
 
 ## 2. Add your X keys
 

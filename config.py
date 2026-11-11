@@ -1,4 +1,4 @@
-"""Settings for the sales bot. Values come from the .env file (see .env.example)."""
+"""Settings for the sales bot. Values come from the .env file (see the README)."""
 from __future__ import annotations
 
 import os
@@ -18,7 +18,6 @@ SEAPORT_ADDRESSES = {
     "0x0000000000000068f116a894984e2db1123eb395",  # Seaport 1.6
     "0x00000000006687982678b03100b9bdc8be440814",  # Seaport 1.6, OpenSea's alternate deployment (MegaETH)
     "0x00000000000000adc04c56bf30ac9d3c0aaf14dc",  # Seaport 1.5
-    "0x00000000000001ad428e4906ae43d8f9852d0dd6",  # Seaport 1.4
     "0x00000000006c3852cbef3e08e8df289169ede581",  # Seaport 1.1
 }
 # An order is OpenSea's if it pays OpenSea's fee or uses OpenSea's signed zone (from OpenSea's SDK).
@@ -88,7 +87,6 @@ CHAINS = {
         "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": usd("USDC"),
     }, marketplaces={
         BLUR_EXCHANGE: "Blur",
-        "0x000000000000ad05ccc4f10045630fb830b95127": "Blur",  # Blur's first exchange
         "0xdf288b66a77f25197544877eaf4626d7e64cb5a8": "NFTX",  # NFTXZap: buys from NFTX pools
     }),
     "base": Chain("Base", 8453, "https://base.gateway.tenderly.co", 25, tokens={

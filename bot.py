@@ -19,13 +19,9 @@ from typing import List, Optional
 # Harmless notice from macOS's built-in Python; hide it so real errors stand out.
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
 
-from chain import RPC, RPCError, Sale, decode_string, find_sales, sales_for_tx
+from chain import ENS, RPC, RPCError, Sale, decode_string, find_sales, sales_for_tx
 from config import Settings, load_settings
-from ens import ENS
-from media import get_image
-from prices import Pricer
-from tweet import check_template, format_tweet
-from x_client import XClient, XError
+from post import Pricer, XClient, XError, format_tweet, get_image, read_template, template_problems
 
 log = logging.getLogger("salesbot")
 
@@ -74,11 +70,19 @@ class Bot:
             raise SystemExit("DRY_RUN is false but the X_API_KEY / X_ACCESS_TOKEN values in .env are not all set")
         self._last_post = 0.0
 
+    def head(self) -> int:
+        """The newest block old enough to trust (see CONFIRMATIONS)."""
+        return self.rpc.block_number() - self.s.confirmations
+
+    def contract_name(self) -> str:
+        """The name the contract reports."""
+        return decode_string(self.rpc.eth_call(self.s.contract, NAME_CALL)).strip()
+
     def collection_name(self) -> str:
         """COLLECTION_NAME, or else the name the contract reports."""
         if not self.s.collection_name:
             try:
-                self.s.collection_name = decode_string(self.rpc.eth_call(self.s.contract, NAME_CALL)).strip()
+                self.s.collection_name = self.contract_name()
             except (RPCError, ValueError):
                 pass
             if not self.s.collection_name:
@@ -136,7 +140,7 @@ class Bot:
         state.save()
 
     def catch_up(self, state: State) -> None:
-        head = self.rpc.block_number() - self.s.confirmations
+        head = self.head()
         while state.last_block < head:
             start = state.last_block + 1
             end = min(head, start + self.s.max_block_range - 1)
@@ -148,9 +152,10 @@ class Bot:
     def run(self) -> None:
         state = State(self.s.state_file)
         if state.last_block is None:
-            head = self.rpc.block_number() - self.s.confirmations
-            state.last_block = self.s.start_block - 1 if self.s.start_block else head
+            state.last_block = self.s.start_block - 1 if self.s.start_block else self.head()
             state.save()
+        for problem in template_problems(read_template()):
+            log.warning("tweet_template.txt %s: that line is left out of posts until it's fixed", problem)
         log.info("Watching %s (%s) on %s from block %d%s", self.collection_name(), self.s.contract,
                  self.s.chain.name, state.last_block + 1, " (DRY RUN: nothing will be posted)" if self.s.dry_run else "")
         errors = 0
@@ -167,7 +172,7 @@ class Bot:
     def recent(self, count: int) -> None:
         """Dry-run the collection's last `count` sales, searching back from the newest block."""
         log.info("Looking for the last %d sales of %s on %s...", count, self.collection_name(), self.s.chain.name)
-        newest = end = self.rpc.block_number() - self.s.confirmations
+        newest = end = self.head()
         span = self.s.max_block_range
         sales: List[Sale] = []
         for _ in range(RECENT_MAX_SCANS):
@@ -196,14 +201,17 @@ class Bot:
         else:
             print(f"RPC: connected, but to chain id {chain_id}, not {chain.name} ({chain.chain_id}). Check CHAIN and RPC_URL.")
         try:
-            print(f"Contract: {decode_string(self.rpc.eth_call(self.s.contract, NAME_CALL))}")
+            print(f"Contract: {self.contract_name()}")
         except Exception as e:
             print(f"Contract: couldn't read name() ({e}) - is CONTRACT_ADDRESS right?")
         if self._supports(ERC1155) and not self._supports(ERC721):
             print("  WARNING: this is an ERC-1155 (editions) contract. The bot only posts ERC-721 sales.")
-        problems = check_template()
+        try:
+            problems = template_problems(read_template())
+        except OSError as e:
+            problems = [f"can't read it ({e})"]
         if problems:
-            print("Post template: posts use the default layout until these are fixed in tweet_template.txt:")
+            print("Post template: these lines are left out of posts until fixed in tweet_template.txt:")
             for problem in problems:
                 print(f"  {problem}")
         else:
@@ -219,19 +227,18 @@ class Bot:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NFT sales bot for X (Robinhood Chain and Ethereum)")
+    parser = argparse.ArgumentParser(description="NFT sales bot for X (Ethereum and other EVM chains)")
     parser.add_argument("--check", action="store_true", help="test the RPC, contract and X keys, then exit")
     parser.add_argument("--recent", nargs="?", const=3, type=int, metavar="N",
                         help="show the posts for the collection's last N sales (default 3) without posting, then exit")
     parser.add_argument("--tx", metavar="HASH", help="process one past transaction, then exit")
-    parser.add_argument("--dry-run", action="store_true", help="never post, even if DRY_RUN=false")
     args = parser.parse_args()
     if args.recent is not None and args.recent < 1:
         parser.error("--recent takes a number of sales, 1 or more")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     settings = load_settings()
-    if args.dry_run or args.recent is not None:
+    if args.recent is not None:
         settings.dry_run = True
     bot = Bot(settings)
 
